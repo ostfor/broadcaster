@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import typing
 
 from redis import asyncio as redis
@@ -43,16 +45,26 @@ class RedisBackend(BroadcastBackend):
     async def _pubsub_listener(self) -> None:
         # redis-py does not listen to the pubsub connection if there are no channels subscribed
         # so we need to wait until the first channel is subscribed to start listening
+        def get_timestamp(event: Event) -> str:
+            return str(json.loads(event.message)['timestamp'])
+        logger = logging.getLogger("pubsub.listener")
+        logger.info("Listening for pubsub messages")
+        messages = []
         while True:
             await self._ready.wait()
+            logger.info("Start listening")
             async for message in self._pubsub.listen():
                 if message["type"] == "message":
                     event = Event(
                         channel=message["channel"].decode(),
                         message=message["data"].decode(),
                     )
+                    ts = get_timestamp(event)
+                    messages.append(ts)
+                    logger.info(f"[Ts: {ts}][num: {len(messages)}] Put in queue message: {message}")
                     await self._queue.put(event)
 
+            logger.info("Stop listening")
             # when no channel subscribed, clear the event.
             # And then in next loop, event will blocked again until
             # the new channel subscribed.Now asyncio.Task will not exit again.
